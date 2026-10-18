@@ -9,9 +9,9 @@
     = 20 packets per second, 120 bytes each).
   - Restarts advertising automatically after any disconnect.
 
-  Arduino IDE: Board = "ESP32 Dev Module" (or "LilyGo T-Display").
-  Works with the Espressif "esp32" board package 2.x and 3.x (Bluedroid BLE).
-  No extra libraries are needed.
+  The GitHub workflow compiles this file automatically (Espressif esp32 core 3.0.7,
+  board "ESP32 Dev Module", partition "Huge APP") and produces one .bin file that
+  is flashed once from a web browser at address 0x0. No extra libraries are needed.
 
   BLE device name : NAV-IMU
   Service UUID    : a8b10001-6d3e-4c27-9f3a-1c2d3e4f5a60
@@ -36,6 +36,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_timer.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -98,9 +99,9 @@ static volatile uint16_t queueDrops = 0;
 static volatile uint32_t samplesMade = 0;
 
 static QueueHandle_t sampleQueue;
-static BLEServer *server = nullptr;
+static BLEServer *bleServer = nullptr;
 static BLECharacteristic *dataChar = nullptr;
-static volatile bool connected = false;
+static volatile bool bleConnected = false;
 static volatile bool restartAdvertising = false;
 static uint32_t disconnectedAtMs = 0;
 static uint16_t packetSeq = 0;
@@ -248,11 +249,11 @@ static void sensorTask(void *) {
 // ---------------- BLE ----------------
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *s) override {
-    connected = true;
+    bleConnected = true;
     Serial.println("BLE connected");
   }
   void onDisconnect(BLEServer *s) override {
-    connected = false;
+    bleConnected = false;
     restartAdvertising = true;
     disconnectedAtMs = millis();
     Serial.println("BLE disconnected");
@@ -318,9 +319,9 @@ void setup() {
   BLEDevice::init(DEVICE_NAME);
   BLEDevice::setMTU(247);
   BLEDevice::setPower(ESP_PWR_LVL_P9);
-  server = BLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks());
-  BLEService *service = server->createService(SERVICE_UUID);
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new ServerCallbacks());
+  BLEService *service = bleServer->createService(SERVICE_UUID);
   dataChar = service->createCharacteristic(DATA_UUID, BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
   dataChar->addDescriptor(new BLE2902());
   service->start();
@@ -340,7 +341,7 @@ void loop() {
 
   Sample s;
   while (xQueueReceive(sampleQueue, &s, pdMS_TO_TICKS(5)) == pdTRUE) {
-    if (!connected) { nb = 0; continue; }
+    if (!bleConnected) { nb = 0; continue; }
     batch[nb++] = s;
     if (nb >= MAX_PER_PACKET) { sendSamples(batch, nb); nb = 0; }
   }
@@ -351,14 +352,14 @@ void loop() {
     BLEDevice::startAdvertising();
     Serial.println("Advertising restarted");
   }
-  if (connected && now - lastStatus >= 1000) {
+  if (bleConnected && now - lastStatus >= 1000) {
     lastStatus = now;
     sendStatus();
   }
   if (now - lastPrint >= 1000) {
     uint32_t made = samplesMade;
     Serial.printf("rate=%lu Hz  ble=%s  i2cErr=%u  drops=%u\n",
-                  (unsigned long)(made - lastCount), connected ? "on" : "off",
+                  (unsigned long)(made - lastCount), bleConnected ? "on" : "off",
                   (unsigned)i2cErrors, (unsigned)queueDrops);
     lastCount = made;
     lastPrint = now;
