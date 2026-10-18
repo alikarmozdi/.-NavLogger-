@@ -1,44 +1,35 @@
-# Builds two things on every push (or with "Run workflow"):
-#   NavLogger-apk   -> NavLogger.apk for the phone
-#   ESP32-firmware  -> one .bin file, flashed once from a web browser at address 0x0
-name: Build NavLogger APK
+name: Build NavLogger
 
 on:
   push:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  apk:
+  android:
     name: Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - name: Get the code
         uses: actions/checkout@v4
 
-      - name: Find the project
-        shell: bash
+      - name: Find project folder
+        id: proj
         run: |
-          set -e
-          # Works when the files were uploaded normally, inside a sub-folder, or as the NavLogger.zip file itself.
-          find_settings() { find . -path ./.git -prune -o -name settings.gradle -print 2>/dev/null | grep -v '/build/' | head -n 1 || true; }
-          if [ -z "$(find_settings)" ]; then
-            for z in $(find . -path ./.git -prune -o -name '*.zip' -print); do
-              echo "Extracting $z"
-              unzip -q -o "$z" -d _unzipped
-            done
-          fi
-          SETTINGS="$(find_settings)"
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::Project files not found (settings.gradle). Upload ALL files of NavLogger.zip (folders app and esp32, files settings.gradle, build.gradle, gradle.properties) or the zip file itself."
-            echo "Files in the repository:"
-            find . -maxdepth 3 -path ./.git -prune -o -print
+          f=$(find . -name settings.gradle -not -path './.git/*' | head -n1)
+          if [ -z "$f" ]; then
+            echo "::error::settings.gradle not found - Android project files are not in the repo"
+            find . -maxdepth 4 -not -path './.git*'
             exit 1
           fi
-          PROJ="$(dirname "$SETTINGS")"
-          echo "Project folder: $PROJ"
-          echo "PROJ=$PROJ" >> "$GITHUB_ENV"
-          ls -la "$PROJ" "$PROJ/app"
+          d=$(dirname "$f")
+          echo "Project folder: $d"
+          if [ ! -f "$d/app/navlogger.jks.b64" ]; then
+            echo "::error::$d/app/navlogger.jks.b64 not found - upload it too"
+            find "$d" -maxdepth 3 -not -path './.git*'
+            exit 1
+          fi
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
 
       - name: Java 17
         uses: actions/setup-java@v4
@@ -54,67 +45,18 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Signing key (fixed, so a new APK installs over the old one)
-        shell: bash
-        run: |
-          base64 -d > "$PROJ/app/navlogger.jks" <<'KEY'
-          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
-          uXzLAgInEA==
-          KEY
+      - name: Signing key (fixed, so new APKs install over old ones)
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: base64 -d app/navlogger.jks.b64 > app/navlogger.jks
 
       - name: Build APK
-        shell: bash
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Rename APK
         run: |
-          cd "$PROJ"
-          gradle --no-daemon --stacktrace :app:assembleRelease
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/out/NavLogger.apk"
+          mkdir -p out
+          cp "${{ steps.proj.outputs.dir }}/app/build/outputs/apk/release/app-release.apk" out/NavLogger.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -122,70 +64,45 @@ jobs:
           name: NavLogger-apk
           path: out/NavLogger.apk
 
-  firmware:
+  esp32:
     name: ESP32 firmware
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      ESP32_INDEX: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     steps:
       - name: Get the code
         uses: actions/checkout@v4
 
-      - name: Find the firmware
-        shell: bash
+      - name: Find sketch folder
+        id: sk
         run: |
-          set -e
-          find_ino() { find . -path ./.git -prune -o -name NavIMU_BLE.ino -print 2>/dev/null | head -n 1 || true; }
-          if [ -z "$(find_ino)" ]; then
-            for z in $(find . -path ./.git -prune -o -name '*.zip' -print); do
-              echo "Extracting $z"
-              unzip -q -o "$z" -d _unzipped
-            done
-          fi
-          INO="$(find_ino)"
-          if [ -z "$INO" ]; then
-            echo "::error::esp32/NavIMU_BLE/NavIMU_BLE.ino not found. Upload the esp32 folder of NavLogger.zip."
+          f=$(find . -name NavIMU_BLE.ino -not -path './.git/*' | head -n1)
+          if [ -z "$f" ]; then
+            echo "::error::NavIMU_BLE.ino not found - firmware file is not in the repo"
+            find . -maxdepth 4 -not -path './.git*'
             exit 1
           fi
-          echo "SKETCH=$(dirname "$INO")" >> "$GITHUB_ENV"
-          echo "Firmware: $INO"
+          d=$(dirname "$f")
+          if [ "$(basename "$d")" != "NavIMU_BLE" ]; then
+            echo "::error::NavIMU_BLE.ino must be inside a folder named NavIMU_BLE (found in $d)"
+            exit 1
+          fi
+          echo "Sketch folder: $d"
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
 
-      - name: Compiler tools
+      - name: Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Python (for the flash-file tool)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: ESP32 board package
-        shell: bash
+      - name: ESP32 core 3.3.12
+        env:
+          URL: https://espressif.github.io/arduino-esp32/package_esp32_index.json
         run: |
-          arduino-cli core update-index --additional-urls "$ESP32_INDEX"
-          arduino-cli core install esp32:esp32@3.0.7 --additional-urls "$ESP32_INDEX"
+          arduino-cli core update-index --additional-urls "$URL"
+          arduino-cli core install esp32:esp32@3.3.12 --additional-urls "$URL"
 
-      - name: Compile firmware
-        shell: bash
-        run: |
-          arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app,FlashMode=dio" --output-dir fw "$SKETCH"
-          ls -la fw
-
-      - name: Make one file to flash at address 0x0
-        shell: bash
-        run: |
-          python -m pip install --quiet "esptool<5"
-          BOOT_APP0="$(find ~/.arduino15/packages/esp32/hardware/esp32 -name boot_app0.bin | head -n 1)"
-          python -m esptool --chip esp32 merge_bin -o NavIMU_firmware_flash_at_0x0.bin \
-            --flash_mode dio --flash_freq 80m --flash_size 4MB \
-            0x1000 fw/NavIMU_BLE.ino.bootloader.bin \
-            0x8000 fw/NavIMU_BLE.ino.partitions.bin \
-            0xe000 "$BOOT_APP0" \
-            0x10000 fw/NavIMU_BLE.ino.bin
-          ls -la NavIMU_firmware_flash_at_0x0.bin
+      - name: Compile
+        run: arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir out "${{ steps.sk.outputs.dir }}"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ESP32-firmware
-          path: NavIMU_firmware_flash_at_0x0.bin
+          name: NavIMU_BLE-firmware
+          path: out/*.bin
